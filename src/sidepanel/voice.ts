@@ -40,37 +40,6 @@ export async function checkMicPermission(): Promise<'granted' | 'denied' | 'prom
   }
 }
 
-function openPermissionPopup(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const popupUrl = chrome.runtime.getURL('assets/permission.html');
-    chrome.windows.create(
-      {
-        url: popupUrl,
-        type: 'popup',
-        width: 420,
-        height: 320,
-        focused: true,
-      },
-      () => {
-        // Listen for permission granted message
-        const listener = (message: any) => {
-          if (message.type === 'MIC_PERMISSION_GRANTED') {
-            chrome.runtime.onMessage.removeListener(listener);
-            resolve();
-          }
-        };
-        chrome.runtime.onMessage.addListener(listener);
-
-        // Timeout after 60 seconds
-        setTimeout(() => {
-          chrome.runtime.onMessage.removeListener(listener);
-          reject(new Error('Permission request timed out'));
-        }, 60000);
-      },
-    );
-  });
-}
-
 // ---- Recording ----
 
 export async function startRecording(): Promise<void> {
@@ -87,22 +56,10 @@ export async function startRecording(): Promise<void> {
       },
     });
   } catch (err: any) {
-    if (err.name === 'NotAllowedError') {
-      // Try the permission popup fallback
-      try {
-        await openPermissionPopup();
-        // Retry after permission granted
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            sampleRate: 16000,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        });
-      } catch {
-        throw new Error('Microphone permission denied');
-      }
+    if (err.name === 'NotAllowedError' || err.name === 'NotFoundError') {
+      throw new Error(
+        'Microphone access blocked. Click the lock icon in the address bar → Site settings → Allow Microphone, then try again.'
+      );
     } else {
       throw err;
     }
