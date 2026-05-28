@@ -1,0 +1,22 @@
+{
+  "name": "heysurf",
+  "version": "0.1.0",
+  "description": "Voice-controlled AI browser agent. Talk to any website.",
+  "private": true,
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.99.0",
+    "@types/chrome": "^0.1.42",
+    "copy-webpack-plugin": "^12.0.2",
+    "css-loader": "^7.1.2",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.7.3",
+    "webpack": "^5.97.1",
+    "webpack-cli": "^6.0.1"
+  }
+}

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HeySurf</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="header">
+      <div class="header-left">
+        <span class="logo">🏄</span>
+        <h1>HeySurf</h1>
+      </div>
+      <button id="settings-btn" class="icon-btn" title="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Chat Area -->
+    <main id="chat-area">
+      <div id="messages">
+        <div class="message system">
+          <p>Ready to surf! Tap the mic or type a command.</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- Input Area -->
+    <footer id="input-area">
+      <div class="input-row">
+        <input type="text" id="text-input" placeholder="Type a command..." autocomplete="off">
+        <button id="mic-btn" class="mic-btn" title="Tap to speak">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+          </svg>
+        </button>
+        <button id="send-btn" class="send-btn" title="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          </svg>
+        </button>
+      </div>
+      <button id="stop-btn" class="stop-btn hidden">Stop Agent</button>
+    </footer>
+
+    <!-- Settings Panel (hidden by default) -->
+    <div id="settings-panel" class="hidden">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button id="settings-close" class="icon-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <div class="setting-group">
+          <h3>LLM Provider</h3>
+          <select id="setting-provider">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="gemini">Google Gemini</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <h3>API Key</h3>
+          <input type="password" id="setting-api-key" placeholder="Enter your API key...">
+        </div>
+        <div class="setting-group">
+          <h3>Model</h3>
+          <input type="text" id="setting-model" placeholder="e.g., gpt-4o">
+          <div class="setting-hint" id="model-hint">Recommended: gpt-4o</div>
+        </div>
+        <div class="setting-group">
+          <h3>Voice</h3>
+          <label class="toggle">
+            <input type="checkbox" id="setting-voice-input" checked>
+            <span>Voice input (microphone)</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-voice-output" checked>
+            <span>Voice output (speak results)</span>
+          </label>
+          <label>
+            <span>Speech rate</span>
+            <input type="range" id="setting-voice-rate" min="0.5" max="2" step="0.1" value="1">
+            <span id="rate-value">1.0</span>
+          </label>
+        </div>
+        <div class="setting-group">
+          <h3>Agent</h3>
+          <label>
+            <span>Max steps per task</span>
+            <input type="number" id="setting-max-steps" min="1" max="50" value="15">
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-confirm-destructive" checked>
+            <span>Confirm destructive actions</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-highlight" checked>
+            <span>Highlight elements during actions</span>
+          </label>
+        </div>
+        <button id="settings-save" class="primary-btn">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
