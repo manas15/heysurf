@@ -144,6 +144,78 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'open_tab',
+      description: 'Open a new browser tab with the given URL.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to open in the new tab',
+          },
+          purpose: {
+            type: 'string',
+            description: 'Brief description of why this tab is being opened',
+          },
+        },
+        required: ['url', 'purpose'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'switch_tab',
+      description: 'Switch to a different browser tab by its tab ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tabId: {
+            type: 'number',
+            description: 'The ID of the tab to switch to',
+          },
+        },
+        required: ['tabId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_tab',
+      description: 'Read page content from a tab without switching to it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tabId: {
+            type: 'number',
+            description: 'The ID of the tab to read from',
+          },
+        },
+        required: ['tabId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'close_tab',
+      description: 'Close a browser tab by its tab ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tabId: {
+            type: 'number',
+            description: 'The ID of the tab to close',
+          },
+        },
+        required: ['tabId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'done',
       description: 'Signal that the task is complete. The summary will be spoken to the user.',
       parameters: {

@@ -1,7 +1,8 @@
 import { ChromeMessage } from '../shared/types';
 import { extractA11yTree, treeToString } from './a11y-tree';
-import { executeAction } from './actions';
+import { executeAction, findTargetElement } from './actions';
 import { highlightElement, clearHighlights } from './highlighter';
+import { visualizeAction, initOverlay, destroyOverlay } from './visual-feedback';
 
 // Guard against duplicate injection
 if (!(window as any).__heySurfInjected) {
@@ -37,13 +38,23 @@ if (!(window as any).__heySurfInjected) {
         }
 
         case 'EXECUTE_ACTION': {
-          executeAction(message.action).then((result) => {
+          (async () => {
+            // Find target element for visualization
+            const action = message.action;
+            let targetEl: Element | undefined;
+            if ('target' in action.args && typeof action.args.target === 'string') {
+              targetEl = findTargetElement(action.args.target, (action.args as any).index) ?? undefined;
+            }
+            // Visualize action BEFORE executing
+            await visualizeAction(action, targetEl);
+            // Execute the actual action
+            const result = await executeAction(action);
             sendResponse({
               type: 'ACTION_RESULT',
               success: result.success,
               message: result.message,
             });
-          });
+          })();
           return true; // async response
         }
 
@@ -65,6 +76,18 @@ if (!(window as any).__heySurfInjected) {
             url: window.location.href,
             title: document.title,
           });
+          return false;
+        }
+
+        case 'INIT_OVERLAY': {
+          initOverlay();
+          sendResponse({ success: true });
+          return false;
+        }
+
+        case 'DESTROY_OVERLAY': {
+          destroyOverlay();
+          sendResponse({ success: true });
           return false;
         }
       }

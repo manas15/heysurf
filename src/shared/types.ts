@@ -1,3 +1,75 @@
+// ---- Task Planning ----
+
+export interface TaskPlan {
+  goal: string;
+  steps: PlanStep[];
+  currentStepIndex: number;
+  status: 'planning' | 'executing' | 'replanning' | 'complete' | 'failed';
+  workingMemory: WorkingMemory;
+}
+
+export interface PlanStep {
+  id: string;
+  description: string;
+  successCriteria: string;
+  status: 'pending' | 'active' | 'complete' | 'failed' | 'skipped';
+  result?: string;
+  attempts: number;
+  maxAttempts: number;
+}
+
+export interface WorkingMemory {
+  discoveredFacts: string[];
+  failedApproaches: string[];
+  currentContext: string;
+}
+
+// ---- User Profile & Memory ----
+
+export interface UserProfile {
+  name: string;
+  email: string;
+  role: string;
+  preferredSites: string[];
+  customFacts: Record<string, string>;
+  onboardingComplete: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Memory {
+  id: string;
+  fact: string;
+  category: 'identity' | 'preference' | 'workflow' | 'site_knowledge' | 'relationship';
+  source: 'onboarding' | 'conversation' | 'behavior';
+  confidence: number;
+  createdAt: number;
+  lastUsedAt: number;
+  usageCount: number;
+}
+
+// ---- Tab Registry ----
+
+export interface TabEntry {
+  tabId: number;
+  url: string;
+  title: string;
+  purpose: string;
+  status: 'active' | 'loading' | 'idle' | 'closed';
+}
+
+// ---- Task History ----
+
+export interface TaskRecord {
+  id: string;
+  goal: string;
+  status: 'complete' | 'failed';
+  startedAt: number;
+  completedAt: number;
+  stepCount: number;
+  summary: string;
+}
+
 // ---- Accessibility Tree ----
 
 export interface A11yNode {
@@ -22,6 +94,10 @@ export type AgentAction =
   | { name: 'navigate'; args: { url: string } }
   | { name: 'read_page'; args: { query: string } }
   | { name: 'wait'; args: { milliseconds?: number } }
+  | { name: 'open_tab'; args: { url: string; purpose: string } }
+  | { name: 'switch_tab'; args: { tabId: number } }
+  | { name: 'read_tab'; args: { tabId: number } }
+  | { name: 'close_tab'; args: { tabId: number } }
   | { name: 'done'; args: { summary: string } };
 
 // ---- LLM Provider ----
@@ -79,7 +155,7 @@ export interface LLMProvider {
 
 export interface HeySurfSettings {
   llm: {
-    provider: 'openai' | 'anthropic' | 'gemini';
+    provider: 'openai' | 'anthropic' | 'gemini' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'together' | 'openrouter';
     apiKey: string;
     model: string;
   };
@@ -122,6 +198,7 @@ export const DEFAULT_SETTINGS: HeySurfSettings = {
 
 export type ChromeMessage =
   | { type: 'PING' }
+  | { type: 'MIC_PERMISSION_GRANTED' }
   | { type: 'GET_A11Y_TREE' }
   | { type: 'EXECUTE_ACTION'; action: AgentAction }
   | { type: 'HIGHLIGHT_ELEMENT'; target: string; index?: number }
@@ -132,12 +209,20 @@ export type ChromeMessage =
   | { type: 'PAGE_INFO_RESULT'; url: string; title: string }
   | { type: 'START_AGENT'; task: string }
   | { type: 'STOP_AGENT' }
-  | { type: 'AGENT_UPDATE'; update: AgentUpdate };
+  | { type: 'AGENT_UPDATE'; update: AgentUpdate }
+  | { type: 'PLAN_UPDATE'; plan: TaskPlan }
+  | { type: 'INIT_OVERLAY' }
+  | { type: 'DESTROY_OVERLAY' };
 
 export type AgentUpdate =
   | { kind: 'thinking'; message: string }
   | { kind: 'action'; action: AgentAction; description: string }
   | { kind: 'action_result'; success: boolean; message: string }
   | { kind: 'speaking'; text: string }
+  | { kind: 'plan_created'; plan: TaskPlan }
+  | { kind: 'step_started'; stepIndex: number; description: string }
+  | { kind: 'step_complete'; stepIndex: number; result: string }
+  | { kind: 'step_failed'; stepIndex: number; reason: string }
+  | { kind: 'replanning'; reason: string }
   | { kind: 'done'; summary: string }
   | { kind: 'error'; message: string };

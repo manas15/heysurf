@@ -78,6 +78,14 @@ function deduplicateElements(elements: Element[]): Element[] {
   return unique;
 }
 
+/** Find the first matching target element (exported for visual-feedback) */
+export function findTargetElement(target: string, index?: number): Element | null {
+  const elements = findElements(target);
+  if (elements.length === 0) return null;
+  const idx = index ?? 0;
+  return elements[Math.min(idx, elements.length - 1)];
+}
+
 function scrollIntoViewIfNeeded(el: Element) {
   const rect = el.getBoundingClientRect();
   const inView =
@@ -88,6 +96,42 @@ function scrollIntoViewIfNeeded(el: Element) {
 
   if (!inView) {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+const CHAR_DELAY = 30; // ms between characters
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function dispatchKeyEvents(el: Element, char: string): void {
+  const opts = { key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true };
+  el.dispatchEvent(new KeyboardEvent('keydown', opts));
+  el.dispatchEvent(new KeyboardEvent('keypress', opts));
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: char, inputType: 'insertText' }));
+  el.dispatchEvent(new KeyboardEvent('keyup', opts));
+}
+
+async function typeCharByChar(
+  el: HTMLInputElement | HTMLTextAreaElement,
+  text: string,
+): Promise<void> {
+  for (const char of text) {
+    el.value += char;
+    dispatchKeyEvents(el, char);
+    await sleep(CHAR_DELAY);
+  }
+}
+
+async function typeCharByCharContentEditable(
+  el: HTMLElement,
+  text: string,
+): Promise<void> {
+  for (const char of text) {
+    el.textContent = (el.textContent ?? '') + char;
+    dispatchKeyEvents(el, char);
+    await sleep(CHAR_DELAY);
   }
 }
 
@@ -123,15 +167,15 @@ export async function executeAction(action: AgentAction): Promise<{ success: boo
             el.value = '';
             el.dispatchEvent(new Event('input', { bubbles: true }));
           }
-          el.value = action.args.text;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
+          // Character-by-character typing for realistic behavior
+          await typeCharByChar(el, action.args.text);
           el.dispatchEvent(new Event('change', { bubbles: true }));
         } else if (el instanceof HTMLElement && el.isContentEditable) {
           el.focus();
           if (action.args.clearFirst !== false) {
             el.textContent = '';
           }
-          el.textContent = action.args.text;
+          await typeCharByCharContentEditable(el, action.args.text);
           el.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
           return { success: false, message: `Element "${action.args.target}" is not a text input` };

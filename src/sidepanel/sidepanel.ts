@@ -1,5 +1,13 @@
 import { AgentUpdate, HeySurfSettings, DEFAULT_SETTINGS } from '../shared/types';
 import { getSettings, saveSettings } from '../shared/storage';
+import {
+  startRecording,
+  stopRecording,
+  speakWithSettings,
+  stopSpeaking,
+  onStateChange,
+  VoiceState,
+} from './voice';
 
 // ---- DOM References ----
 
@@ -28,91 +36,83 @@ const highlightToggle = document.getElementById('setting-highlight') as HTMLInpu
 
 // ---- State ----
 
-let isListening = false;
 let isAgentRunning = false;
-let recognition: any = null;
 let currentSettings: HeySurfSettings = { ...DEFAULT_SETTINGS };
 
 // ---- Model Hints ----
 
 const MODEL_HINTS: Record<string, { model: string; hint: string }> = {
-  openai: { model: 'gpt-4o', hint: 'Recommended: gpt-4o, gpt-4o-mini (cheaper)' },
-  anthropic: { model: 'claude-sonnet-4-6-20250514', hint: 'Recommended: claude-sonnet-4-6-20250514' },
-  gemini: { model: 'gemini-2.0-flash', hint: 'Recommended: gemini-2.0-flash, gemini-2.5-pro' },
+  openai: { model: 'gpt-4o', hint: 'gpt-4o, gpt-4o-mini, o3-mini' },
+  anthropic: { model: 'claude-sonnet-4-6-20250514', hint: 'claude-sonnet-4-6, claude-haiku-4-5' },
+  gemini: { model: 'gemini-2.0-flash', hint: 'gemini-2.0-flash, gemini-2.5-pro' },
+  groq: { model: 'llama-3.3-70b-versatile', hint: 'llama-3.3-70b, mixtral-8x7b (ultra fast)' },
+  mistral: { model: 'mistral-large-latest', hint: 'mistral-large, mistral-small' },
+  deepseek: { model: 'deepseek-chat', hint: 'deepseek-chat, deepseek-reasoner (cheapest)' },
+  xai: { model: 'grok-3-mini', hint: 'grok-3, grok-3-mini' },
+  together: { model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', hint: 'Llama 3.3, Qwen, Mixtral' },
+  openrouter: { model: 'openai/gpt-4o', hint: 'Any model — one key for all providers' },
 };
 
 // ---- Voice ----
 
 function initVoice() {
-  const SpeechRecognition =
-    (window as any).SpeechRecognition ||
-    (window as any).webkitSpeechRecognition;
+  // Update mic button and input placeholder based on voice state changes
+  onStateChange((state: VoiceState) => {
+    updateMicButtonState(state);
+  });
+}
 
-  if (!SpeechRecognition) {
-    micBtn.style.display = 'none';
-    return;
+function updateMicButtonState(state: VoiceState) {
+  // Remove all voice-state classes
+  micBtn.classList.remove('listening', 'transcribing');
+
+  switch (state) {
+    case 'recording':
+      micBtn.classList.add('listening');
+      textInput.placeholder = 'Recording...';
+      textInput.value = '';
+      break;
+    case 'transcribing':
+      micBtn.classList.add('transcribing');
+      textInput.placeholder = 'Transcribing...';
+      break;
+    case 'speaking':
+    case 'idle':
+      textInput.placeholder = 'Type a command...';
+      break;
   }
+}
 
-  recognition = new SpeechRecognition();
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  recognition.lang = currentSettings.voice.language;
+async function handleMicClick() {
+  if (!currentSettings.voice.inputEnabled) return;
 
-  recognition.onresult = (event: any) => {
-    let transcript = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      transcript += event.results[i][0].transcript;
-    }
-    textInput.value = transcript;
+  // Get voice module's current state from the button classes
+  const isRecording = micBtn.classList.contains('listening');
 
-    // If final result, submit
-    if (event.results[event.results.length - 1].isFinal) {
-      stopListening();
+  if (isRecording) {
+    // Stop recording and get transcript
+    try {
+      const transcript = await stopRecording();
       if (transcript.trim()) {
+        textInput.value = transcript;
         submitTask(transcript.trim());
       }
+    } catch (err: any) {
+      addMessage('system', `Voice error: ${err.message || 'Failed to transcribe'}`);
     }
-  };
-
-  recognition.onerror = () => {
-    stopListening();
-  };
-
-  recognition.onend = () => {
-    stopListening();
-  };
-}
-
-function startListening() {
-  if (!recognition || !currentSettings.voice.inputEnabled) return;
-  isListening = true;
-  micBtn.classList.add('listening');
-  textInput.placeholder = 'Listening...';
-  textInput.value = '';
-  recognition.start();
-}
-
-function stopListening() {
-  isListening = false;
-  micBtn.classList.remove('listening');
-  textInput.placeholder = 'Type a command...';
-  try {
-    recognition?.stop();
-  } catch {
-    // may already be stopped
+  } else {
+    // Start recording
+    try {
+      await startRecording();
+    } catch (err: any) {
+      addMessage('system', `Mic error: ${err.message || 'Could not access microphone'}`);
+    }
   }
 }
 
 function speak(text: string) {
   if (!currentSettings.voice.outputEnabled) return;
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = currentSettings.voice.rate;
-  if (currentSettings.voice.voiceURI) {
-    const voices = speechSynthesis.getVoices();
-    const voice = voices.find((v) => v.voiceURI === currentSettings.voice.voiceURI);
-    if (voice) utterance.voice = voice;
-  }
-  speechSynthesis.speak(utterance);
+  speakWithSettings(text, currentSettings.voice.rate, currentSettings.voice.voiceURI);
 }
 
 // ---- Messages ----
@@ -279,13 +279,7 @@ async function handleSaveSettings() {
 
 // ---- Event Listeners ----
 
-micBtn.addEventListener('click', () => {
-  if (isListening) {
-    stopListening();
-  } else {
-    startListening();
-  }
-});
+micBtn.addEventListener('click', handleMicClick);
 
 sendBtn.addEventListener('click', () => {
   submitTask(textInput.value);

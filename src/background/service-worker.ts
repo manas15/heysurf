@@ -1,7 +1,11 @@
 import { ChromeMessage, AgentUpdate } from '../shared/types';
 import { AgentLoop } from './agent-loop';
+import { initTabListeners } from './tab-manager';
 
 let agentLoop: AgentLoop | null = null;
+
+// Initialize tab manager event listeners at top level (survives SW restarts)
+initTabListeners();
 
 // Open side panel when extension icon is clicked
 chrome.action.onClicked.addListener((tab) => {
@@ -50,6 +54,13 @@ async function handleStartAgent(task: string) {
     return;
   }
 
+  // Send INIT_OVERLAY to content script
+  try {
+    chrome.tabs.sendMessage(tab.id, { type: 'INIT_OVERLAY' });
+  } catch {
+    // best-effort
+  }
+
   // Ensure content script is injected
   try {
     await chrome.scripting.executeScript({
@@ -66,6 +77,14 @@ async function handleStartAgent(task: string) {
     broadcastUpdate(update);
 
     if (update.kind === 'done' || update.kind === 'error') {
+      // Send DESTROY_OVERLAY to content script
+      if (tab.id) {
+        try {
+          chrome.tabs.sendMessage(tab.id, { type: 'DESTROY_OVERLAY' });
+        } catch {
+          // best-effort
+        }
+      }
       agentLoop = null;
     }
   });
