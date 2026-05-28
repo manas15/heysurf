@@ -164,8 +164,14 @@ export class AgentLoop {
           // best-effort
         }
 
-        // Small delay to let page update
-        if (name !== 'wait' && name !== 'read_page') {
+        // Wait for page to settle after actions
+        if (name === 'click' || name === 'navigate') {
+          // These may cause navigation — wait for page load
+          await new Promise((r) => setTimeout(r, 1500));
+          await this.waitForPageLoad(tabId);
+          await this.injectContentScript(tabId);
+          await new Promise((r) => setTimeout(r, 500));
+        } else if (name !== 'wait' && name !== 'read_page') {
           await new Promise((r) => setTimeout(r, 800));
         }
       }
@@ -182,26 +188,57 @@ export class AgentLoop {
     this.abortController?.abort();
   }
 
+  private async injectContentScript(tabId: number): Promise<void> {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content/content-script.js'],
+      });
+    } catch {
+      // May fail if page isn't ready yet, that's okay
+    }
+  }
+
+  private async waitForPageLoad(tabId: number): Promise<void> {
+    // Wait for the tab to finish loading
+    for (let i = 0; i < 20; i++) {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.status === 'complete') return;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
   private async getPageState(
     tabId: number,
   ): Promise<{ tree: string; url: string; title: string }> {
-    return new Promise((resolve, reject) => {
-      chrome.tabs.sendMessage(tabId, { type: 'GET_A11Y_TREE' }, (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        if (!response) {
-          reject(new Error('No response from content script'));
-          return;
-        }
-        resolve({
-          tree: response.tree,
-          url: response.url,
-          title: response.title,
+    // Retry up to 5 times, re-injecting content script if needed
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        return await new Promise((resolve, reject) => {
+          chrome.tabs.sendMessage(tabId, { type: 'GET_A11Y_TREE' }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (!response) {
+              reject(new Error('No response from content script'));
+              return;
+            }
+            resolve({
+              tree: response.tree,
+              url: response.url,
+              title: response.title,
+            });
+          });
         });
-      });
-    });
+      } catch {
+        // Content script likely gone after navigation — wait for page load and re-inject
+        await this.waitForPageLoad(tabId);
+        await this.injectContentScript(tabId);
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    throw new Error('Could not communicate with page after multiple attempts');
   }
 }
 
