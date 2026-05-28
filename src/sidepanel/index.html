@@ -22,6 +22,9 @@
       </button>
     </header>
 
+    <!-- Onboarding (hidden by default) -->
+    <div id="onboarding" class="hidden"></div>
+
     <!-- Chat Area -->
     <main id="chat-area">
       <div id="messages">
@@ -29,7 +32,22 @@
           <p>Ready to surf! Tap the mic or type a command.</p>
         </div>
       </div>
+      <!-- Plan Display -->
+      <div id="plan-display" class="hidden">
+        <div class="plan-header">
+          <button id="plan-toggle" class="plan-toggle-btn">
+            <svg class="plan-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+            <span id="plan-title">Task Plan</span>
+          </button>
+        </div>
+        <div id="plan-steps" class="plan-steps"></div>
+      </div>
     </main>
+
+    <!-- Status Bar -->
+    <div id="status-bar">Ready</div>
 
     <!-- Input Area -->
     <footer id="input-area">
@@ -77,7 +95,10 @@
         </div>
         <div class="setting-group">
           <h3>API Key</h3>
-          <input type="password" id="setting-api-key" placeholder="Enter your API key...">
+          <div class="api-key-row">
+            <input type="password" id="setting-api-key" placeholder="Enter your API key...">
+            <a id="settings-get-key-link" class="get-key-link" href="https://platform.openai.com/api-keys" target="_blank" title="Get API Key">Get Key</a>
+          </div>
         </div>
         <div class="setting-group">
           <h3>Model</h3>
@@ -115,9 +136,16 @@
             <span>Highlight elements during actions</span>
           </label>
         </div>
+        <div class="setting-group">
+          <h3>Personalization</h3>
+          <button id="memory-viewer-btn" class="secondary-btn full-width">What HeySurf Knows</button>
+        </div>
         <button id="settings-save" class="primary-btn">Save Settings</button>
       </div>
     </div>
+
+    <!-- Memory Viewer (hidden by default) -->
+    <div id="memory-viewer" class="hidden"></div>
   </div>
 
   <script src="sidepanel.js"></script>

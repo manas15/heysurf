@@ -1,5 +1,6 @@
-import { AgentUpdate, HeySurfSettings, DEFAULT_SETTINGS } from '../shared/types';
+import { AgentUpdate, HeySurfSettings, DEFAULT_SETTINGS, TaskPlan } from '../shared/types';
 import { getSettings, saveSettings } from '../shared/storage';
+import { PROVIDER_INFO } from '../llm/provider';
 import {
   startRecording,
   stopRecording,
@@ -8,6 +9,8 @@ import {
   onStateChange,
   VoiceState,
 } from './voice';
+import { isOnboardingNeeded, showOnboarding } from './onboarding';
+import { showMemoryViewer, hideMemoryViewer } from './memory-viewer';
 
 // ---- DOM References ----
 
@@ -20,6 +23,14 @@ const settingsBtn = document.getElementById('settings-btn')!;
 const settingsPanel = document.getElementById('settings-panel')!;
 const settingsClose = document.getElementById('settings-close')!;
 const settingsSave = document.getElementById('settings-save')!;
+const statusBar = document.getElementById('status-bar')!;
+const planDisplay = document.getElementById('plan-display')!;
+const planSteps = document.getElementById('plan-steps')!;
+const planTitle = document.getElementById('plan-title')!;
+const planToggle = document.getElementById('plan-toggle')!;
+const memoryViewerBtn = document.getElementById('memory-viewer-btn')!;
+const memoryViewerEl = document.getElementById('memory-viewer')!;
+const settingsGetKeyLink = document.getElementById('settings-get-key-link') as HTMLAnchorElement;
 
 // Settings inputs
 const providerSelect = document.getElementById('setting-provider') as HTMLSelectElement;
@@ -38,6 +49,8 @@ const highlightToggle = document.getElementById('setting-highlight') as HTMLInpu
 
 let isAgentRunning = false;
 let currentSettings: HeySurfSettings = { ...DEFAULT_SETTINGS };
+let currentPlan: TaskPlan | null = null;
+let planCollapsed = false;
 
 // ---- Model Hints ----
 
@@ -53,17 +66,66 @@ const MODEL_HINTS: Record<string, { model: string; hint: string }> = {
   openrouter: { model: 'openai/gpt-4o', hint: 'Any model — one key for all providers' },
 };
 
+// ---- Status Bar ----
+
+function setStatus(text: string) {
+  statusBar.textContent = text;
+}
+
+// ---- Plan Display ----
+
+function showPlan(plan: TaskPlan) {
+  currentPlan = plan;
+  planDisplay.classList.remove('hidden');
+  planTitle.textContent = `Plan: ${plan.goal}`;
+  renderPlanSteps();
+}
+
+function renderPlanSteps() {
+  if (!currentPlan) return;
+
+  planSteps.innerHTML = currentPlan.steps
+    .map((step, i) => {
+      let statusIcon = '';
+      let statusClass = '';
+
+      switch (step.status) {
+        case 'complete':
+          statusIcon = '<span class="step-icon step-complete">&#10003;</span>';
+          statusClass = 'step-done';
+          break;
+        case 'failed':
+          statusIcon = '<span class="step-icon step-failed">&#10007;</span>';
+          statusClass = 'step-error';
+          break;
+        case 'active':
+          statusIcon = '<span class="step-icon step-active"><span class="spinner"></span></span>';
+          statusClass = 'step-running';
+          break;
+        default:
+          statusIcon = '<span class="step-icon step-pending">' + (i + 1) + '</span>';
+          statusClass = 'step-waiting';
+      }
+
+      return `<div class="plan-step ${statusClass}">${statusIcon}<span class="step-desc">${escapeHtml(step.description)}</span></div>`;
+    })
+    .join('');
+}
+
+function hidePlan() {
+  planDisplay.classList.add('hidden');
+  currentPlan = null;
+}
+
 // ---- Voice ----
 
 function initVoice() {
-  // Update mic button and input placeholder based on voice state changes
   onStateChange((state: VoiceState) => {
     updateMicButtonState(state);
   });
 }
 
 function updateMicButtonState(state: VoiceState) {
-  // Remove all voice-state classes
   micBtn.classList.remove('listening', 'transcribing');
 
   switch (state) {
@@ -71,14 +133,17 @@ function updateMicButtonState(state: VoiceState) {
       micBtn.classList.add('listening');
       textInput.placeholder = 'Recording...';
       textInput.value = '';
+      setStatus('Listening...');
       break;
     case 'transcribing':
       micBtn.classList.add('transcribing');
       textInput.placeholder = 'Transcribing...';
+      setStatus('Transcribing...');
       break;
     case 'speaking':
     case 'idle':
       textInput.placeholder = 'Type a command...';
+      if (!isAgentRunning) setStatus('Ready');
       break;
   }
 }
@@ -86,11 +151,9 @@ function updateMicButtonState(state: VoiceState) {
 async function handleMicClick() {
   if (!currentSettings.voice.inputEnabled) return;
 
-  // Get voice module's current state from the button classes
   const isRecording = micBtn.classList.contains('listening');
 
   if (isRecording) {
-    // Stop recording and get transcript
     try {
       const transcript = await stopRecording();
       if (transcript.trim()) {
@@ -101,7 +164,6 @@ async function handleMicClick() {
       addMessage('system', `Voice error: ${err.message || 'Failed to transcribe'}`);
     }
   } else {
-    // Start recording
     try {
       await startRecording();
     } catch (err: any) {
@@ -130,7 +192,7 @@ function addMessage(
   }
 
   if (type === 'action') {
-    const icon = extra === 'error' ? '✗' : extra === 'success' ? '✓' : '→';
+    const icon = extra === 'error' ? '&#10007;' : extra === 'success' ? '&#10003;' : '&rarr;';
     div.innerHTML = `<span class="action-icon">${icon}</span> ${escapeHtml(text)}`;
   } else {
     div.textContent = text;
@@ -156,6 +218,8 @@ function submitTask(task: string) {
   textInput.value = '';
   isAgentRunning = true;
   stopBtn.classList.remove('hidden');
+  setStatus('Planning...');
+  hidePlan();
 
   chrome.runtime.sendMessage({ type: 'START_AGENT', task });
 }
@@ -164,6 +228,7 @@ function stopAgent() {
   chrome.runtime.sendMessage({ type: 'STOP_AGENT' });
   isAgentRunning = false;
   stopBtn.classList.add('hidden');
+  setStatus('Ready');
   addMessage('system', 'Agent stopped.');
 }
 
@@ -200,25 +265,68 @@ chrome.runtime.onMessage.addListener((message) => {
       speak(update.text);
       break;
 
+    case 'plan_created':
+      showPlan(update.plan);
+      setStatus(`Executing Step 1/${update.plan.steps.length}...`);
+      break;
+
+    case 'step_started':
+      if (currentPlan) {
+        // Reset all to pending/complete, mark this one active
+        currentPlan.steps.forEach((s, i) => {
+          if (i === update.stepIndex) s.status = 'active';
+        });
+        renderPlanSteps();
+        setStatus(`Executing Step ${update.stepIndex + 1}/${currentPlan.steps.length}...`);
+      }
+      break;
+
+    case 'step_complete':
+      if (currentPlan && currentPlan.steps[update.stepIndex]) {
+        currentPlan.steps[update.stepIndex].status = 'complete';
+        currentPlan.steps[update.stepIndex].result = update.result;
+        renderPlanSteps();
+      }
+      break;
+
+    case 'step_failed':
+      if (currentPlan && currentPlan.steps[update.stepIndex]) {
+        currentPlan.steps[update.stepIndex].status = 'failed';
+        renderPlanSteps();
+      }
+      break;
+
+    case 'replanning':
+      setStatus('Replanning...');
+      addMessage('thinking', `Replanning: ${update.reason}`);
+      break;
+
     case 'done':
       isAgentRunning = false;
       stopBtn.classList.add('hidden');
-      // Remove thinking message
+      setStatus('Done');
       const thinkingDone = messagesEl.querySelector('.message.thinking');
       if (thinkingDone) thinkingDone.remove();
-      // Only add done message if it's different from the last speaking message
       const lastMsg = messagesEl.lastElementChild;
       if (!lastMsg?.classList.contains('speaking') || lastMsg.textContent !== update.summary) {
         addMessage('assistant', update.summary);
       }
+      // Reset status after a moment
+      setTimeout(() => {
+        if (!isAgentRunning) setStatus('Ready');
+      }, 3000);
       break;
 
     case 'error':
       isAgentRunning = false;
       stopBtn.classList.add('hidden');
+      setStatus('Error');
       const thinkingErr = messagesEl.querySelector('.message.thinking');
       if (thinkingErr) thinkingErr.remove();
       addMessage('action', update.message, 'error');
+      setTimeout(() => {
+        if (!isAgentRunning) setStatus('Ready');
+      }, 3000);
       break;
   }
 });
@@ -239,12 +347,20 @@ async function loadSettings() {
   confirmDestructiveToggle.checked = currentSettings.agent.confirmDestructive;
   highlightToggle.checked = currentSettings.agent.highlightActions;
   updateModelHint();
+  updateGetKeyLink();
 }
 
 function updateModelHint() {
   const hint = MODEL_HINTS[providerSelect.value];
   if (hint) {
     modelHint.textContent = hint.hint;
+  }
+}
+
+function updateGetKeyLink() {
+  const info = PROVIDER_INFO[providerSelect.value];
+  if (info) {
+    settingsGetKeyLink.href = info.keyUrl;
   }
 }
 
@@ -310,14 +426,38 @@ providerSelect.addEventListener('change', () => {
     modelInput.value = hint.model;
     updateModelHint();
   }
+  updateGetKeyLink();
 });
 
 voiceRateSlider.addEventListener('input', () => {
   rateValue.textContent = parseFloat(voiceRateSlider.value).toFixed(1);
 });
 
+// Plan toggle (collapse/expand)
+planToggle.addEventListener('click', () => {
+  planCollapsed = !planCollapsed;
+  planSteps.classList.toggle('collapsed', planCollapsed);
+  planToggle.querySelector('.plan-chevron')!.classList.toggle('rotated', planCollapsed);
+});
+
+// Memory viewer
+memoryViewerBtn.addEventListener('click', () => {
+  settingsPanel.classList.add('hidden');
+  showMemoryViewer(memoryViewerEl);
+});
+
 // ---- Init ----
 
-loadSettings().then(() => {
+async function init() {
+  await loadSettings();
   initVoice();
-});
+
+  const needsOnboarding = await isOnboardingNeeded();
+  if (needsOnboarding) {
+    await showOnboarding();
+    // Reload settings after onboarding (API key was set)
+    await loadSettings();
+  }
+}
+
+init();
