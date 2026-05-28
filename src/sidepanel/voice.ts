@@ -7,8 +7,6 @@ export type StateChangeCallback = (state: VoiceState) => void;
 
 // ---- Module State ----
 
-let mediaRecorder: MediaRecorder | null = null;
-let audioChunks: Blob[] = [];
 let currentState: VoiceState = 'idle';
 let stateChangeCallback: StateChangeCallback | null = null;
 let currentUtterances: SpeechSynthesisUtterance[] = [];
@@ -28,84 +26,54 @@ export function onStateChange(cb: StateChangeCallback) {
   stateChangeCallback = cb;
 }
 
-// ---- Mic Permission ----
+// ---- Offscreen Document Management ----
 
-export async function checkMicPermission(): Promise<'granted' | 'denied' | 'prompt'> {
-  try {
-    const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-    return result.state as 'granted' | 'denied' | 'prompt';
-  } catch {
-    // permissions.query may not be available in all contexts
-    return 'prompt';
-  }
+async function ensureOffscreenDocument(): Promise<void> {
+  // Check if offscreen document already exists
+  const contexts = await (chrome.runtime as any).getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+  });
+
+  if (contexts && contexts.length > 0) return;
+
+  await chrome.offscreen.createDocument({
+    url: 'offscreen/offscreen.html',
+    reasons: ['USER_MEDIA' as any],
+    justification: 'Microphone audio capture for voice commands',
+  });
 }
 
-// ---- Recording ----
+// ---- Recording (via offscreen document) ----
 
 export async function startRecording(): Promise<void> {
   if (currentState === 'recording') return;
 
-  let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        sampleRate: 16000,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    });
+    await ensureOffscreenDocument();
   } catch (err: any) {
-    if (err.name === 'NotAllowedError' || err.name === 'NotFoundError') {
-      throw new Error(
-        'Microphone access blocked. Click the lock icon in the address bar → Site settings → Allow Microphone, then try again.'
-      );
-    } else {
-      throw err;
-    }
+    throw new Error('Could not set up audio capture: ' + (err.message || err));
   }
 
-  audioChunks = [];
+  const response = await chrome.runtime.sendMessage({ type: 'OFFSCREEN_START_RECORDING' });
+  if (!response?.success) {
+    throw new Error(response?.error || 'Failed to start recording');
+  }
 
-  // Prefer webm/opus which Whisper accepts natively; fall back to whatever the browser supports
-  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : MediaRecorder.isTypeSupported('audio/webm')
-      ? 'audio/webm'
-      : undefined;
-
-  mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-
-  mediaRecorder.ondataavailable = (event) => {
-    if (event.data.size > 0) {
-      audioChunks.push(event.data);
-    }
-  };
-
-  mediaRecorder.start(250); // collect chunks every 250ms
   setState('recording');
 }
 
 export async function stopRecording(): Promise<string> {
-  if (!mediaRecorder || currentState !== 'recording') {
-    return '';
+  if (currentState !== 'recording') return '';
+
+  const response = await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_RECORDING' });
+
+  if (!response?.success) {
+    setState('idle');
+    throw new Error(response?.error || 'Failed to stop recording');
   }
 
-  const blob = await new Promise<Blob>((resolve) => {
-    mediaRecorder!.onstop = () => {
-      const mimeType = mediaRecorder!.mimeType || 'audio/webm';
-      const blob = new Blob(audioChunks, { type: mimeType });
-      resolve(blob);
-    };
-    mediaRecorder!.stop();
-  });
-
-  // Stop all tracks to release the mic
-  mediaRecorder!.stream.getTracks().forEach((t) => t.stop());
-  mediaRecorder = null;
-  audioChunks = [];
-
-  if (blob.size === 0) {
+  const audioBase64: string = response.audioBase64;
+  if (!audioBase64) {
     setState('idle');
     return '';
   }
@@ -113,7 +81,15 @@ export async function stopRecording(): Promise<string> {
   setState('transcribing');
 
   try {
-    const transcript = await transcribeWithWhisper(blob);
+    // Convert base64 back to blob
+    const binary = atob(audioBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const audioBlob = new Blob([bytes], { type: 'audio/webm' });
+
+    const transcript = await transcribeWithWhisper(audioBlob);
     setState('idle');
     return transcript;
   } catch (err) {
@@ -129,12 +105,13 @@ async function transcribeWithWhisper(audioBlob: Blob): Promise<string> {
   const apiKey = settings.llm.apiKey;
 
   if (!apiKey) {
-    throw new Error('No API key configured. Please set your OpenAI API key in Settings.');
+    throw new Error('No API key configured. Open settings to add your key.');
   }
 
-  const ext = audioBlob.type.includes('webm') ? 'webm' : 'ogg';
+  // Whisper only works with OpenAI keys. For other providers, use OpenAI key if available
+  // or fall back to the configured key (some OpenAI-compatible providers support whisper)
   const formData = new FormData();
-  formData.append('file', audioBlob, `recording.${ext}`);
+  formData.append('file', audioBlob, 'recording.webm');
   formData.append('model', 'whisper-1');
 
   const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -147,7 +124,7 @@ async function transcribeWithWhisper(audioBlob: Blob): Promise<string> {
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Whisper API error (${response.status}): ${errorText}`);
+    throw new Error(`Whisper error (${response.status}): ${errorText}`);
   }
 
   const data = await response.json();
@@ -156,18 +133,13 @@ async function transcribeWithWhisper(audioBlob: Blob): Promise<string> {
 
 // ---- TTS (SpeechSynthesis) ----
 
-/**
- * Split text into sentence-sized chunks to prevent TTS cutoff in extensions.
- */
 function splitIntoSentences(text: string): string[] {
-  // Split on sentence-ending punctuation followed by whitespace
   const sentences = text.match(/[^.!?]+[.!?]+[\s]?|[^.!?]+$/g);
   if (!sentences) return [text];
   return sentences.map((s) => s.trim()).filter(Boolean);
 }
 
 export function speak(text: string) {
-  // Cancel any ongoing speech first — fixes silent failure bug in extensions
   speechSynthesis.cancel();
   currentUtterances = [];
 
@@ -175,7 +147,7 @@ export function speak(text: string) {
 
   for (const sentence of sentences) {
     const utterance = new SpeechSynthesisUtterance(sentence);
-    utterance.rate = 1.0; // Will be overridden by caller's settings if needed
+    utterance.rate = 1.0;
     currentUtterances.push(utterance);
   }
 
@@ -183,7 +155,6 @@ export function speak(text: string) {
 
   setState('speaking');
 
-  // Chain utterances: speak them sequentially
   const speakNext = (index: number) => {
     if (index >= currentUtterances.length) {
       setState('idle');
