@@ -121,6 +121,7 @@ export const DEFAULT_SETTINGS: HeySurfSettings = {
 // ---- Chrome Message Passing ----
 
 export type ChromeMessage =
+  | { type: 'PING' }
   | { type: 'GET_A11Y_TREE' }
   | { type: 'EXECUTE_ACTION'; action: AgentAction }
   | { type: 'HIGHLIGHT_ELEMENT'; target: string; index?: number }

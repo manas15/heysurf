@@ -8,11 +8,9 @@ type UpdateCallback = (update: AgentUpdate) => void;
 
 export class AgentLoop {
   private running = false;
-  private abortController: AbortController | null = null;
 
   async run(tabId: number, task: string, onUpdate: UpdateCallback): Promise<void> {
     this.running = true;
-    this.abortController = new AbortController();
 
     const settings = await getSettings();
     if (!settings.llm.apiKey) {
@@ -25,6 +23,13 @@ export class AgentLoop {
     const maxSteps = settings.agent.maxSteps;
 
     onUpdate({ kind: 'thinking', message: 'Reading page...' });
+
+    // Make sure content script is alive before starting
+    const alive = await this.ensureContentScript(tabId);
+    if (!alive) {
+      onUpdate({ kind: 'error', message: 'Cannot connect to page. Try refreshing the page and try again.' });
+      return;
+    }
 
     for (let step = 0; step < maxSteps; step++) {
       if (!this.running) {
@@ -39,7 +44,7 @@ export class AgentLoop {
       } catch (err) {
         onUpdate({
           kind: 'error',
-          message: `Cannot read page. Make sure you're on a webpage and refresh if needed.`,
+          message: `Cannot read page: ${err instanceof Error ? err.message : String(err)}`,
         });
         return;
       }
@@ -119,13 +124,13 @@ export class AgentLoop {
         // Highlight target element if applicable
         if (settings.agent.highlightActions && 'target' in args) {
           try {
-            await chrome.tabs.sendMessage(tabId, {
+            await this.sendToTab(tabId, {
               type: 'HIGHLIGHT_ELEMENT',
               target: (args as { target: string }).target,
               index: (args as { index?: number }).index,
             });
           } catch {
-            // Highlight is best-effort
+            // best-effort
           }
         }
 
@@ -136,11 +141,11 @@ export class AgentLoop {
         // Execute the action
         let result: { success: boolean; message: string };
         try {
-          const response = await chrome.tabs.sendMessage(tabId, {
+          const resp = await this.sendToTab(tabId, {
             type: 'EXECUTE_ACTION',
             action,
           });
-          result = { success: response.success, message: response.message };
+          result = { success: resp.success, message: resp.message };
         } catch (err) {
           result = {
             success: false,
@@ -157,22 +162,19 @@ export class AgentLoop {
           tool_call_id: id,
         });
 
-        // Clear highlights
+        // Clear highlights (best-effort)
         try {
-          await chrome.tabs.sendMessage(tabId, { type: 'CLEAR_HIGHLIGHTS' });
+          await this.sendToTab(tabId, { type: 'CLEAR_HIGHLIGHTS' });
         } catch {
-          // best-effort
+          // ignore
         }
 
-        // Wait for page to settle after actions
+        // After click/navigate — page may have changed. Wait and re-establish connection.
         if (name === 'click' || name === 'navigate') {
-          // These may cause navigation — wait for page load
-          await new Promise((r) => setTimeout(r, 1500));
-          await this.waitForPageLoad(tabId);
-          await this.injectContentScript(tabId);
-          await new Promise((r) => setTimeout(r, 500));
+          await this.sleep(2000);
+          await this.ensureContentScript(tabId);
         } else if (name !== 'wait' && name !== 'read_page') {
-          await new Promise((r) => setTimeout(r, 800));
+          await this.sleep(500);
         }
       }
     }
@@ -185,7 +187,33 @@ export class AgentLoop {
 
   stop() {
     this.running = false;
-    this.abortController?.abort();
+  }
+
+  // ---- Helpers ----
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  private sendToTab(tabId: number, message: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
+    });
+  }
+
+  private async ping(tabId: number): Promise<boolean> {
+    try {
+      const resp = await this.sendToTab(tabId, { type: 'PING' });
+      return resp?.type === 'PONG';
+    } catch {
+      return false;
+    }
   }
 
   private async injectContentScript(tabId: number): Promise<void> {
@@ -195,50 +223,54 @@ export class AgentLoop {
         files: ['content/content-script.js'],
       });
     } catch {
-      // May fail if page isn't ready yet, that's okay
+      // ignore — page might not be ready
     }
   }
 
-  private async waitForPageLoad(tabId: number): Promise<void> {
-    // Wait for the tab to finish loading
-    for (let i = 0; i < 20; i++) {
-      const tab = await chrome.tabs.get(tabId);
-      if (tab.status === 'complete') return;
-      await new Promise((r) => setTimeout(r, 500));
+  private async waitForTabLoad(tabId: number, timeoutMs = 15000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.status === 'complete') return;
+      } catch {
+        // tab might be mid-navigation
+      }
+      await this.sleep(300);
     }
+  }
+
+  private async ensureContentScript(tabId: number): Promise<boolean> {
+    // Try pinging the content script up to 10 times
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if (await this.ping(tabId)) return true;
+
+      // Wait for page to load, then inject
+      await this.waitForTabLoad(tabId, 5000);
+      await this.injectContentScript(tabId);
+      await this.sleep(600);
+    }
+    return false;
   }
 
   private async getPageState(
     tabId: number,
   ): Promise<{ tree: string; url: string; title: string }> {
-    // Retry up to 5 times, re-injecting content script if needed
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        return await new Promise((resolve, reject) => {
-          chrome.tabs.sendMessage(tabId, { type: 'GET_A11Y_TREE' }, (response) => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-              return;
-            }
-            if (!response) {
-              reject(new Error('No response from content script'));
-              return;
-            }
-            resolve({
-              tree: response.tree,
-              url: response.url,
-              title: response.title,
-            });
-          });
-        });
-      } catch {
-        // Content script likely gone after navigation — wait for page load and re-inject
-        await this.waitForPageLoad(tabId);
-        await this.injectContentScript(tabId);
-        await new Promise((r) => setTimeout(r, 500));
-      }
+    // Ensure content script is alive
+    const alive = await this.ensureContentScript(tabId);
+    if (!alive) {
+      throw new Error('Content script not responding. Try refreshing the page.');
     }
-    throw new Error('Could not communicate with page after multiple attempts');
+
+    const response = await this.sendToTab(tabId, { type: 'GET_A11Y_TREE' });
+    if (!response || !response.tree) {
+      throw new Error('Empty response from content script');
+    }
+    return {
+      tree: response.tree,
+      url: response.url,
+      title: response.title,
+    };
   }
 }
 
